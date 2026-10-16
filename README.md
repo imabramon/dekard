@@ -1,35 +1,35 @@
 # dekard
 
-MCP-сервер заметок для ИИ-агентов: общая память между чатами и сессиями.
+MCP server with notes for AI agents: shared memory across chats and sessions.
 
-Пример: несколько скиллов прогоняют `tsc` перед действием. Если коммит уже проверен в другом чате, агент читает заметку `tsc/<hash>` и не запускает проверку повторно.
+Example: several skills run `tsc` before doing their job. If a commit has already been checked in another chat, the agent reads the `tsc/<hash>` note and skips the check.
 
-## Возможности
+## Features
 
-- Заметки вида `topic` / `key` / `value`
-- Иерархические топики через `/`: запрос `company/branch` вернёт заметки из `company/branch`, `company/branch/a`, `company/branch/a/b`, но не из `company/branchX`
-- Мягкое удаление: удалённая заметка скрыта, но 30 дней её можно восстановить, после чего она удаляется окончательно
-- Хранение в SQLite (встроенный `node:sqlite`), безопасная параллельная работа нескольких чатов (WAL)
-- Все запросы параметризованы — защищено от SQL-инъекций, покрыто тестами
+- Notes as `topic` / `key` / `value`
+- Hierarchical topics with `/`: querying `company/branch` returns notes from `company/branch`, `company/branch/a`, `company/branch/a/b`, but not from `company/branchX`
+- Soft delete: a deleted note is hidden but can be restored within 30 days, after which it is removed permanently
+- SQLite storage (built-in `node:sqlite`), safe concurrent access from multiple chats (WAL)
+- All queries are parameterized — protected against SQL injection and covered by tests
 
-## Инструменты
+## Tools
 
-| Инструмент | Параметры | Результат |
+| Tool | Parameters | Result |
 |---|---|---|
-| `add_note` | `topic`, `key`, `value` | Создаёт или перезаписывает заметку |
-| `get_note` | `topic`, `key` | Заметка или `null` |
-| `get_topic_notes` | `topic` | Заметки топика и всех вложенных топиков |
-| `delete_note` | `topic`, `key` | `true`, если заметка удалена |
-| `restore_note` | `topic`, `key` | Восстановленная заметка или `null` |
-| `get_deleted_topic_notes` | `topic` | Удалённые заметки, которые ещё можно восстановить |
+| `add_note` | `topic`, `key`, `value` | Creates or overwrites a note |
+| `get_note` | `topic`, `key` | Note or `null` |
+| `get_topic_notes` | `topic` | Notes of the topic and all nested topics |
+| `delete_note` | `topic`, `key` | `true` if the note was deleted |
+| `restore_note` | `topic`, `key` | Restored note or `null` |
+| `get_deleted_topic_notes` | `topic` | Deleted notes that can still be restored |
 
-Слэши в конце топика отбрасываются (`tsc/` → `tsc`). Символ `\0` в строках запрещён.
+Trailing slashes in topics are ignored (`tsc/` → `tsc`). The `\0` character is not allowed in strings.
 
-## Требования
+## Requirements
 
-Node.js **22.18+** — TypeScript запускается напрямую, без сборки.
+Node.js **22.18+** — TypeScript runs directly, no build step.
 
-## Установка
+## Installation
 
 ```bash
 git clone https://github.com/imabramon/dekard.git
@@ -43,7 +43,7 @@ npm install
 claude mcp add dekard --scope user -- node /path/to/dekard/src/index.ts
 ```
 
-### Другие MCP-клиенты
+### Other MCP clients
 
 ```json
 {
@@ -56,49 +56,24 @@ claude mcp add dekard --scope user -- node /path/to/dekard/src/index.ts
 }
 ```
 
-## Где хранятся данные
+## Data location
 
-| ОС | Путь |
+| OS | Path |
 |---|---|
 | Windows | `%LOCALAPPDATA%\dekard\notes.db` |
 | macOS | `~/Library/Application Support/dekard/notes.db` |
-| Linux | `$XDG_DATA_HOME/dekard/notes.db` (по умолчанию `~/.local/share/dekard/notes.db`) |
+| Linux | `$XDG_DATA_HOME/dekard/notes.db` (defaults to `~/.local/share/dekard/notes.db`) |
 
-Путь можно переопределить переменной окружения `DEKARD_DB`:
+The path can be overridden with the `DEKARD_DB` environment variable:
 
 ```bash
 claude mcp add dekard --scope user -e DEKARD_DB=/path/to/notes.db -- node /path/to/dekard/src/index.ts
 ```
 
-## Пример для скилла
+## Skill example
 
 ```markdown
-- получи хэш коммита: `git rev-parse HEAD`; если есть незакоммиченные изменения — заметки не используй
-- вызови get_note(topic="tsc", key=<хэш>); если value="passed" — tsc не запускай
-- иначе запусти tsc; если ошибок нет — add_note(topic="tsc", key=<хэш>, value="passed")
+- get the commit hash: `git rev-parse HEAD`; if there are uncommitted changes, do not use notes
+- call get_note(topic="tsc", key=<hash>); if value="passed", skip tsc
+- otherwise run tsc; if there are no errors, call add_note(topic="tsc", key=<hash>, value="passed")
 ```
-
-## Архитектура
-
-```
-src/
-  index.ts                 сборка зависимостей и запуск по stdio
-  createServer.ts          регистрация MCP-инструментов
-  getAppDataDir.ts         системная папка данных
-  notes/
-    Note.ts                модель
-    INotesRepository.ts    контракт хранилища
-    NotesService.ts        бизнес-логика: нормализация, валидация, срок хранения
-  infrastructure/
-    SqliteNotesRepository.ts  реализация INotesRepository на SQLite
-```
-
-Чтобы сменить хранилище, реализуйте `INotesRepository` и передайте его в `NotesService` в `src/index.ts`.
-
-## Тесты
-
-```bash
-npm test
-```
-
-Функциональные тесты репозитория, сервиса и MCP-инструментов, а также тесты безопасности (SQL-инъекции, подмена типов, спецсимволы).
