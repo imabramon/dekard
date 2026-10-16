@@ -10,13 +10,19 @@ describe("NotesService", () => {
   });
 
   afterEach(() => {
-    context.repository.close();
+    context.close();
   });
 
   test("addNote stores the note with current time", async () => {
     const note = await context.service.addNote("tsc", "abc", "passed");
 
-    assert.deepEqual(note, { topic: "tsc", key: "abc", value: "passed", updatedAt: "2026-10-01T00:00:00.000Z" });
+    assert.deepEqual(note, {
+      topic: "tsc",
+      key: "abc",
+      value: "passed",
+      description: "",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    });
     assert.deepEqual(await context.service.getNote("tsc", "abc"), note);
   });
 
@@ -29,8 +35,62 @@ describe("NotesService", () => {
       topic: "tsc",
       key: "abc",
       value: "passed",
+      description: "",
       updatedAt: "2026-10-02T00:00:00.000Z",
     });
+  });
+
+  test("addNote stores description and overwrite without description clears it", async () => {
+    const note = await context.service.addNote("files", "helper", "src/helper.ts", "resx helper");
+
+    assert.equal(note.description, "resx helper");
+    assert.equal((await context.service.getNote("files", "helper"))?.description, "resx helper");
+
+    await context.service.addNote("files", "helper", "src/helper.ts");
+    assert.equal((await context.service.getNote("files", "helper"))?.description, "");
+  });
+
+  test("searchNotes matches key, value and description case-insensitively", async () => {
+    await context.service.addNote("files", "getResxString", "src/a.ts");
+    await context.service.addNote("files", "formatDate", "src/resx/b.ts");
+    await context.service.addNote("files", "useTranslation", "src/c.ts", "Локализация строк");
+    await context.service.addNote("files", "other", "src/d.ts", "unrelated");
+
+    assert.deepEqual(
+      (await context.service.searchNotes("files", "RESX")).map((note) => note.key),
+      ["getResxString", "formatDate"],
+    );
+    assert.deepEqual(
+      (await context.service.searchNotes("files", "локализация")).map((note) => note.key),
+      ["useTranslation"],
+    );
+  });
+
+  test("searchNotes sorts by number of matched words", async () => {
+    await context.service.addNote("files", "one", "v", "resx");
+    await context.service.addNote("files", "two", "v", "resx localization");
+    await context.service.addNote("files", "none", "v", "date");
+
+    assert.deepEqual(
+      (await context.service.searchNotes("files", "  resx   localization resx ")).map((note) => note.key),
+      ["two", "one"],
+    );
+  });
+
+  test("searchNotes looks in nested topics and skips deleted notes", async () => {
+    await context.service.addNote("pyrus/files/resx", "nested", "v", "resx");
+    await context.service.addNote("pyrus/filesX", "sibling", "v", "resx");
+    await context.service.addNote("pyrus/files", "deleted", "v", "resx");
+    await context.service.deleteNote("pyrus/files", "deleted");
+
+    assert.deepEqual(
+      (await context.service.searchNotes("pyrus/files", "resx")).map((note) => note.key),
+      ["nested"],
+    );
+  });
+
+  test("searchNotes rejects empty query", async () => {
+    await assert.rejects(context.service.searchNotes("files", "   "), /Invalid query/);
   });
 
   test("trailing slashes in topic are ignored everywhere", async () => {
@@ -72,6 +132,7 @@ describe("NotesService", () => {
         topic: "tsc",
         key: "abc",
         value: "passed",
+        description: "",
         updatedAt: "2026-10-01T00:00:00.000Z",
         deletedAt: "2026-10-02T00:00:00.000Z",
       },
@@ -81,6 +142,7 @@ describe("NotesService", () => {
       topic: "tsc",
       key: "abc",
       value: "passed",
+      description: "",
       updatedAt: "2026-10-01T00:00:00.000Z",
     });
     assert.deepEqual(await context.service.getDeletedTopicNotes("tsc"), []);

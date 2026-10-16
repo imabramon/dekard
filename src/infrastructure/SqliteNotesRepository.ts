@@ -1,10 +1,7 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import type { INotesRepository } from "../notes/INotesRepository.ts";
 import type { DeletedNote, Note } from "../notes/Note.ts";
-
-type SqliteRow = Record<string, unknown>;
+import { getTopicTreeParams, openSqliteDatabase, type SqliteRow } from "./sqlite.ts";
 
 interface SqliteNotesRepositoryParams {
   dbPath: string;
@@ -21,15 +18,13 @@ export class SqliteNotesRepository implements INotesRepository {
   private readonly _purgeDeletedBeforeStatement: StatementSync;
 
   public constructor(params: SqliteNotesRepositoryParams) {
-    mkdirSync(dirname(params.dbPath), { recursive: true });
-    this._db = new DatabaseSync(params.dbPath);
+    this._db = openSqliteDatabase(params.dbPath);
     this._db.exec(`
-      PRAGMA busy_timeout = 5000;
-      PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS notes (
         topic TEXT NOT NULL,
         key TEXT NOT NULL,
         value TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL,
         deleted_at TEXT,
         PRIMARY KEY (topic, key)
@@ -37,23 +32,24 @@ export class SqliteNotesRepository implements INotesRepository {
     `);
     this._migrate();
     this._upsertStatement = this._db.prepare(`
-      INSERT INTO notes (topic, key, value, updated_at, deleted_at) VALUES (?, ?, ?, ?, NULL)
+      INSERT INTO notes (topic, key, value, description, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)
       ON CONFLICT (topic, key) DO UPDATE SET
         value = excluded.value,
+        description = excluded.description,
         updated_at = excluded.updated_at,
         deleted_at = NULL
     `);
     this._findStatement = this._db.prepare(`
-      SELECT topic, key, value, updated_at AS updatedAt FROM notes
+      SELECT topic, key, value, description, updated_at AS updatedAt FROM notes
       WHERE topic = ? AND key = ? AND deleted_at IS NULL
     `);
     this._findByTopicStatement = this._db.prepare(`
-      SELECT topic, key, value, updated_at AS updatedAt FROM notes
+      SELECT topic, key, value, description, updated_at AS updatedAt FROM notes
       WHERE (topic = ? OR substr(topic, 1, length(?)) = ?) AND deleted_at IS NULL
       ORDER BY topic, updated_at DESC
     `);
     this._findDeletedByTopicStatement = this._db.prepare(`
-      SELECT topic, key, value, updated_at AS updatedAt, deleted_at AS deletedAt FROM notes
+      SELECT topic, key, value, description, updated_at AS updatedAt, deleted_at AS deletedAt FROM notes
       WHERE (topic = ? OR substr(topic, 1, length(?)) = ?) AND deleted_at IS NOT NULL
       ORDER BY topic, deleted_at DESC
     `);
@@ -69,7 +65,7 @@ export class SqliteNotesRepository implements INotesRepository {
   }
 
   public upsert = async (note: Note): Promise<void> => {
-    this._upsertStatement.run(note.topic, note.key, note.value, note.updatedAt);
+    this._upsertStatement.run(note.topic, note.key, note.value, note.description, note.updatedAt);
   };
 
   public find = async (topic: string, key: string): Promise<Note | null> => {
@@ -78,10 +74,10 @@ export class SqliteNotesRepository implements INotesRepository {
   };
 
   public findByTopic = async (topic: string): Promise<Note[]> =>
-    this._findByTopicStatement.all(...this._getTopicTreeParams(topic)).map(this._toNote);
+    this._findByTopicStatement.all(...getTopicTreeParams(topic)).map(this._toNote);
 
   public findDeletedByTopic = async (topic: string): Promise<DeletedNote[]> =>
-    this._findDeletedByTopicStatement.all(...this._getTopicTreeParams(topic)).map(this._toDeletedNote);
+    this._findDeletedByTopicStatement.all(...getTopicTreeParams(topic)).map(this._toDeletedNote);
 
   public markDeleted = async (topic: string, key: string, deletedAt: string): Promise<boolean> =>
     Number(this._markDeletedStatement.run(deletedAt, topic, key).changes) > 0;
@@ -100,6 +96,7 @@ export class SqliteNotesRepository implements INotesRepository {
     topic: String(row.topic),
     key: String(row.key),
     value: String(row.value),
+    description: String(row.description),
     updatedAt: String(row.updatedAt),
   });
 
@@ -108,15 +105,13 @@ export class SqliteNotesRepository implements INotesRepository {
     deletedAt: String(row.deletedAt),
   });
 
-  private _getTopicTreeParams = (topic: string): [string, string, string] => {
-    const childPrefix = `${topic}/`;
-    return [topic, childPrefix, childPrefix];
-  };
-
   private _migrate = (): void => {
     const columns = this._db.prepare("PRAGMA table_info(notes)").all();
     if (!columns.some((column) => column.name === "deleted_at")) {
       this._db.exec("ALTER TABLE notes ADD COLUMN deleted_at TEXT");
+    }
+    if (!columns.some((column) => column.name === "description")) {
+      this._db.exec("ALTER TABLE notes ADD COLUMN description TEXT NOT NULL DEFAULT ''");
     }
   };
 }

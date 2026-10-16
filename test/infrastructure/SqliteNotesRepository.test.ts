@@ -10,6 +10,7 @@ const note = (topic: string, key: string, value = "v", updatedAt = "2026-10-01T0
   topic,
   key,
   value,
+  description: "",
   updatedAt,
 });
 
@@ -30,6 +31,14 @@ describe("SqliteNotesRepository", () => {
 
     assert.deepEqual(await repository.find("tsc", "abc"), note("tsc", "abc", "failed", "2026-10-02T00:00:00.000Z"));
     assert.equal((await repository.findByTopic("tsc")).length, 1);
+  });
+
+  test("upsert stores and overwrites description", async () => {
+    await repository.upsert({ ...note("files", "helper"), description: "first" });
+    assert.equal((await repository.find("files", "helper"))?.description, "first");
+
+    await repository.upsert({ ...note("files", "helper"), description: "second" });
+    assert.equal((await repository.find("files", "helper"))?.description, "second");
   });
 
   test("find returns null for missing note", async () => {
@@ -140,7 +149,7 @@ describe("SqliteNotesRepository file database", () => {
     second.close();
   });
 
-  test("migrates a database without deleted_at column", async () => {
+  test("migrates a database without deleted_at and description columns", async () => {
     const dbPath = join(dir, "old.db");
     const oldDb = new DatabaseSync(dbPath);
     oldDb.exec(`

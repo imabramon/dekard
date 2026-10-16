@@ -1,14 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { SKILL_EVENTS } from "./metrics/MetricEvent.ts";
+import type { MetricsService } from "./metrics/MetricsService.ts";
 import type { NotesService } from "./notes/NotesService.ts";
 
 interface CreateServerParams {
   addNote: NotesService["addNote"];
   getNote: NotesService["getNote"];
+  searchNotes: NotesService["searchNotes"];
   getTopicNotes: NotesService["getTopicNotes"];
   deleteNote: NotesService["deleteNote"];
   restoreNote: NotesService["restoreNote"];
   getDeletedTopicNotes: NotesService["getDeletedTopicNotes"];
+  trackSkillEvent: MetricsService["trackSkillEvent"];
+  getStats: MetricsService["getStats"];
 }
 
 const toResult = (data: unknown) => ({
@@ -23,14 +28,18 @@ export const createServer = (params: CreateServerParams): McpServer => {
     {
       title: "Add note",
       description:
-        "Save a note shared between chats. Overwrites the existing note with the same topic and key. Example: topic='tsc', key=<commit hash>, value='passed'.",
+        "Save a note shared between chats. Overwrites the existing note with the same topic and key. Example: topic='tsc', key=<commit hash>, value='passed'. Add a description with purpose and synonyms when the note should be found by search_notes.",
       inputSchema: {
         topic: z.string().min(1).describe("Hierarchical note group with '/' separator, e.g. 'tsc' or 'company/branch'"),
         key: z.string().min(1).describe("Note key within topic, e.g. commit hash"),
         value: z.string().describe("Note content"),
+        description: z
+          .string()
+          .optional()
+          .describe("Free text used by search_notes: what it is, what it is for, synonyms and keywords"),
       },
     },
-    async ({ topic, key, value }) => toResult(await params.addNote(topic, key, value)),
+    async ({ topic, key, value, description }) => toResult(await params.addNote(topic, key, value, description)),
   );
 
   server.registerTool(
@@ -44,6 +53,20 @@ export const createServer = (params: CreateServerParams): McpServer => {
       },
     },
     async ({ topic, key }) => toResult(await params.getNote(topic, key)),
+  );
+
+  server.registerTool(
+    "search_notes",
+    {
+      title: "Search notes",
+      description:
+        "Search notes of the topic and all its nested topics by words in key, value and description. Case-insensitive substring match; notes matching more words come first. Example: topic='pyrus/files', query='resx localization'.",
+      inputSchema: {
+        topic: z.string().min(1),
+        query: z.string().min(1).describe("Space-separated words, any of them may match"),
+      },
+    },
+    async ({ topic, query }) => toResult(await params.searchNotes(topic, query)),
   );
 
   server.registerTool(
@@ -97,6 +120,35 @@ export const createServer = (params: CreateServerParams): McpServer => {
       },
     },
     async ({ topic }) => toResult(await params.getDeletedTopicNotes(topic)),
+  );
+
+  server.registerTool(
+    "track_event",
+    {
+      title: "Track event",
+      description:
+        "Record the outcome of a skill step for usage analytics. find: cache_hit (found in notes), cache_stale (note was outdated and deleted), code_hit (found only in code and saved), miss (found nowhere). add: reused, extended, created. remember: from_review (reviewer pointed to existing code that was missed), manual.",
+      inputSchema: {
+        topic: z.string().min(1).describe("Catalog topic, e.g. '<project>/files'"),
+        event: z.enum(SKILL_EVENTS),
+        key: z.string().min(1).optional().describe("Key of the related note, if any"),
+      },
+    },
+    async ({ topic, event, key }) => toResult(await params.trackSkillEvent(topic, event, key)),
+  );
+
+  server.registerTool(
+    "get_stats",
+    {
+      title: "Get stats",
+      description:
+        "Usage analytics for the topic and its nested topics: searches and empty queries, skill outcomes, cache hit rate, reuse rate, misses caught on review, most found and never found notes.",
+      inputSchema: {
+        topic: z.string().min(1),
+        since: z.string().min(1).optional().describe("ISO date to count events from, e.g. '2026-10-01'"),
+      },
+    },
+    async ({ topic, since }) => toResult(await params.getStats(topic, since)),
   );
 
   return server;

@@ -27,7 +27,7 @@ describe("security: SQL injection", () => {
   });
 
   afterEach(() => {
-    context.repository.close();
+    context.close();
   });
 
   const assertDatabaseIntact = async (): Promise<void> => {
@@ -35,6 +35,7 @@ describe("security: SQL injection", () => {
       topic: "victim",
       key: "secret",
       value: "original",
+      description: "",
       updatedAt: "2026-10-01T00:00:00.000Z",
     });
     assert.equal((await context.service.getTopicNotes("victim")).length, 2);
@@ -48,6 +49,7 @@ describe("security: SQL injection", () => {
         topic: payload,
         key: payload,
         value: payload,
+        description: "",
         updatedAt: "2026-10-01T00:00:00.000Z",
       });
       await assertDatabaseIntact();
@@ -58,6 +60,8 @@ describe("security: SQL injection", () => {
       assert.equal(await context.service.getNote(payload, "secret"), null);
       assert.deepEqual(await context.service.getTopicNotes(payload), []);
       assert.deepEqual(await context.service.getDeletedTopicNotes(payload), []);
+      assert.deepEqual(await context.service.searchNotes("victim", payload), []);
+      assert.deepEqual(await context.service.searchNotes(payload, "secret"), []);
       await assertDatabaseIntact();
     });
 
@@ -73,6 +77,8 @@ describe("security: SQL injection", () => {
     await assert.rejects(context.service.addNote("t", "a\u0000b", "v"), /null character/);
     await assert.rejects(context.service.addNote("t\u0000x", "k", "v"), /null character/);
     await assert.rejects(context.service.addNote("t", "k", "v\u0000hidden"), /null character/);
+    await assert.rejects(context.service.addNote("t", "k", "v", "d\u0000hidden"), /null character/);
+    await assert.rejects(context.service.searchNotes("victim", "secret\u0000"), /null character/);
     assert.throws(() => context.service.getNote("victim", "secret\u0000"), /null character/);
     await assert.rejects(context.service.deleteNote("victim", "secret\u0000"), /null character/);
     await assertDatabaseIntact();
@@ -101,13 +107,13 @@ describe("security: MCP input validation", () => {
 
   beforeEach(async () => {
     context = createTestContext();
-    client = await connectClient(context.service);
+    client = await connectClient(context);
     await context.service.addNote("victim", "secret", "original");
   });
 
   afterEach(async () => {
     await client.close();
-    context.repository.close();
+    context.close();
   });
 
   const invalidCalls: [string, Record<string, unknown>][] = [
@@ -120,6 +126,15 @@ describe("security: MCP input validation", () => {
     ["get_note", { topic: "victim" }],
     ["get_note", { topic: "victim", key: null }],
     ["get_topic_notes", {}],
+    ["search_notes", { topic: "victim" }],
+    ["search_notes", { topic: "victim", query: "" }],
+    ["search_notes", { topic: "victim", query: "   " }],
+    ["add_note", { topic: "t", key: "k", value: "v", description: 1 }],
+    ["track_event", { topic: "t" }],
+    ["track_event", { topic: "t", event: "' OR 1=1 --" }],
+    ["track_event", { topic: "/", event: "miss" }],
+    ["get_stats", {}],
+    ["get_stats", { topic: "t", since: "not a date" }],
     ["get_topic_notes", { topic: "/" }],
     ["add_note", { topic: "t", key: "k\u0000", value: "v" }],
     ["delete_note", { topic: "victim", key: 1 }],
@@ -142,7 +157,7 @@ describe("security: MCP input validation", () => {
 
     assert.deepEqual(await client.callTool("get_note", { topic: payload, key: payload }), {
       isError: false,
-      data: { topic: payload, key: payload, value: payload, updatedAt: "2026-10-01T00:00:00.000Z" },
+      data: { topic: payload, key: payload, value: payload, description: "", updatedAt: "2026-10-01T00:00:00.000Z" },
     });
     assert.equal((await context.service.getNote("victim", "secret"))?.value, "original");
   });

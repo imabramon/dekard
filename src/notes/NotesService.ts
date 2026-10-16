@@ -1,5 +1,6 @@
 import type { INotesRepository } from "./INotesRepository.ts";
 import type { DeletedNote, Note } from "./Note.ts";
+import { normalizeTopic, validateText } from "../validation.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -20,11 +21,12 @@ export class NotesService {
     this._now = params.now;
   }
 
-  public addNote = async (topic: string, key: string, value: string): Promise<Note> => {
+  public addNote = async (topic: string, key: string, value: string, description = ""): Promise<Note> => {
     const note: Note = {
-      topic: this._normalizeTopic(topic),
-      key: this._validateText("key", key),
-      value: this._validateText("value", value),
+      topic: normalizeTopic(topic),
+      key: validateText("key", key),
+      value: validateText("value", value),
+      description: validateText("description", description),
       updatedAt: this._now().toISOString(),
     };
     await this._repository.upsert(note);
@@ -32,31 +34,41 @@ export class NotesService {
   };
 
   public getNote = (topic: string, key: string): Promise<Note | null> =>
-    this._repository.find(this._normalizeTopic(topic), this._validateText("key", key));
+    this._repository.find(normalizeTopic(topic), validateText("key", key));
 
   public getTopicNotes = (topic: string): Promise<Note[]> =>
-    this._repository.findByTopic(this._normalizeTopic(topic));
+    this._repository.findByTopic(normalizeTopic(topic));
+
+  public searchNotes = async (topic: string, query: string): Promise<Note[]> => {
+    const words = this._getSearchWords(query);
+    const notes = await this._repository.findByTopic(normalizeTopic(topic));
+    return notes
+      .map((note) => ({ note, score: this._getSearchScore(note, words) }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ note }) => note);
+  };
 
   public deleteNote = async (topic: string, key: string): Promise<boolean> => {
     await this.purgeExpiredNotes();
     return this._repository.markDeleted(
-      this._normalizeTopic(topic),
-      this._validateText("key", key),
+      normalizeTopic(topic),
+      validateText("key", key),
       this._now().toISOString(),
     );
   };
 
   public restoreNote = async (topic: string, key: string): Promise<Note | null> => {
     await this.purgeExpiredNotes();
-    const normalizedTopic = this._normalizeTopic(topic);
-    const validKey = this._validateText("key", key);
+    const normalizedTopic = normalizeTopic(topic);
+    const validKey = validateText("key", key);
     const isRestored = await this._repository.restore(normalizedTopic, validKey);
     return isRestored ? this._repository.find(normalizedTopic, validKey) : null;
   };
 
   public getDeletedTopicNotes = async (topic: string): Promise<DeletedNote[]> => {
     await this.purgeExpiredNotes();
-    return this._repository.findDeletedByTopic(this._normalizeTopic(topic));
+    return this._repository.findDeletedByTopic(normalizeTopic(topic));
   };
 
   public purgeExpiredNotes = (): Promise<number> => {
@@ -64,18 +76,16 @@ export class NotesService {
     return this._repository.purgeDeletedBefore(expirationDate.toISOString());
   };
 
-  private _normalizeTopic = (topic: string): string => {
-    const normalizedTopic = this._validateText("topic", topic).replace(/\/+$/, "");
-    if (normalizedTopic === "") {
-      throw new Error(`Invalid topic: "${topic}"`);
+  private _getSearchWords = (query: string): string[] => {
+    const words = validateText("query", query).toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      throw new Error(`Invalid query: "${query}"`);
     }
-    return normalizedTopic;
+    return [...new Set(words)];
   };
 
-  private _validateText = (name: string, text: string): string => {
-    if (text.includes("\u0000")) {
-      throw new Error(`Invalid ${name}: null character is not allowed`);
-    }
-    return text;
+  private _getSearchScore = (note: Note, words: string[]): number => {
+    const text = `${note.key} ${note.value} ${note.description}`.toLowerCase();
+    return words.filter((word) => text.includes(word)).length;
   };
 }
